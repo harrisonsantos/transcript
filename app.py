@@ -56,26 +56,74 @@ st.markdown("""
 @st.cache_resource
 def check_ffmpeg():
     try:
-        subprocess.run(["ffmpeg", "-version"], capture_output=True, check=True)
-        return True
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        return False
+        # Tenta diferentes caminhos possíveis do FFmpeg
+        ffmpeg_paths = ["ffmpeg", "/usr/bin/ffmpeg", "/usr/local/bin/ffmpeg"]
+        
+        for path in ffmpeg_paths:
+            try:
+                result = subprocess.run([path, "-version"], capture_output=True, check=True, timeout=10)
+                return True, path
+            except (subprocess.CalledProcessError, FileNotFoundError, subprocess.TimeoutExpired):
+                continue
+        
+        return False, None
+    except Exception as e:
+        return False, None
+
+# Função para instalar FFmpeg se necessário (para ambiente local)
+def install_ffmpeg_instructions():
+    return """
+    ⚠️ **FFmpeg não encontrado no sistema!**
+    
+    **Se você está executando localmente:**
+    
+    **Windows:**
+    1. Baixe: https://ffmpeg.org/download.html
+    2. Extraia e adicione ao PATH
+    
+    **Linux/Ubuntu:**
+    ```bash
+    sudo apt update
+    sudo apt install ffmpeg
+    ```
+    
+    **macOS:**
+    ```bash
+    brew install ffmpeg
+    ```
+    
+    **Se você está no Streamlit Cloud:**
+    - Verifique se o arquivo `packages.txt` está no repositório
+    - Conteúdo do `packages.txt` deve ser:
+    ```
+    ffmpeg
+    libsm6
+    libxext6
+    libfontconfig1
+    libxrender1
+    ```
+    - Faça commit e aguarde o redeploy
+    """
 
 # Função para extrair áudio do vídeo
-def extract_audio(video_path, audio_path):
+def extract_audio(video_path, audio_path, ffmpeg_path="ffmpeg"):
     try:
         ffmpeg_command = [
-            "ffmpeg", "-y", "-i", video_path,
+            ffmpeg_path, "-y", "-i", video_path,
             "-vn", "-acodec", "mp3", "-ab", "192k",
+            "-loglevel", "error",  # Reduz logs verbosos
             audio_path
         ]
         result = subprocess.run(
             ffmpeg_command, 
             capture_output=True, 
             text=True, 
-            check=True
+            check=True,
+            timeout=300  # 5 minutos de timeout
         )
         return True, "Áudio extraído com sucesso!"
+    except subprocess.TimeoutExpired:
+        return False, "Timeout: O vídeo é muito longo para processar"
     except subprocess.CalledProcessError as e:
         return False, f"Erro ao extrair áudio: {e.stderr}"
     except Exception as e:
@@ -136,25 +184,16 @@ def main():
     st.sidebar.info(f"**Modelo selecionado:** {model_size}\n\n{model_info[model_size]}")
 
     # Verificar se FFmpeg está disponível
-    if not check_ffmpeg():
-        st.error("""
-        ❌ **FFmpeg não encontrado!**
+    ffmpeg_available, ffmpeg_path = check_ffmpeg()
+    
+    if not ffmpeg_available:
+        st.error("❌ **FFmpeg não encontrado!**")
+        st.markdown(install_ffmpeg_instructions())
         
-        Para usar esta aplicação, você precisa instalar o FFmpeg:
+        # Adicionar botão para tentar recarregar
+        if st.button("🔄 Tentar novamente"):
+            st.rerun()
         
-        **No Windows:**
-        1. Baixe o FFmpeg em: https://ffmpeg.org/download.html
-        2. Extraia e adicione à variável PATH
-        
-        **No Linux/Mac:**
-        ```bash
-        # Ubuntu/Debian
-        sudo apt install ffmpeg
-        
-        # macOS
-        brew install ffmpeg
-        ```
-        """)
         return
 
     # Upload do arquivo
@@ -193,7 +232,7 @@ def main():
                 progress_bar.progress(25)
                 
                 audio_path = os.path.join(temp_dir, "audio.mp3")
-                success, message = extract_audio(video_path, audio_path)
+                success, message = extract_audio(video_path, audio_path, ffmpeg_path)
                 
                 if not success:
                     st.error(f"❌ {message}")
